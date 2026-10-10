@@ -4,6 +4,7 @@
 使い方:
   python analyze_engagement_keywords.py                  # 全地域で回帰、銚子でキーワード集計
   python analyze_engagement_keywords.py --base choshi
+  python analyze_engagement_keywords.py --base narita --base-theme 歴史・寺社   # テーマの基準を寺にする（寺＝1）
 
 前提: 各地域でステップ1〜3を実行済み。APIは使わない。
 必要なライブラリ: statsmodels（pip install statsmodels）
@@ -20,7 +21,8 @@
     目的変数2: エンゲージメント率（いいね＋コメント）÷再生数 → log10（再生100回以上の動画のみ）
   - 対数をとるのは、再生数が数回〜数百万回と桁違いに散らばっているため
   - 誤差のばらつきが動画ごとに違うことを考え、頑健な標準誤差（HC3）を使う
-  - 基準: テーマ「絶景・自然」、地域は --base の地域、言語「英語」
+  - 基準: テーマ「絶景・自然」（--base-theme で変えられる）、地域は --base の地域、言語「英語」
+    基準を変えても、テーマどうしの差（グルメと寺の差など）は同じ。どのテーマを「1」として見せるかだけが変わる
   - 本数が少ないテーマは「その他」にまとめる（推定が不安定になるため）
 
 【C. 頑健性の確認（fetch_channel_stats.py を実行済みのときだけ）】
@@ -116,20 +118,21 @@ def prepare(all_data, base_name):
     return df.dropna(subset=["log_age"])
 
 
-def lump_themes(df):
+def lump_themes(df, base_theme=BASE_THEME):
     counts = df["primary_theme"].value_counts()
     small = counts[counts < MIN_THEME_N].index
     theme = df["primary_theme"].where(~df["primary_theme"].isin(small), "その他")
-    cats = [BASE_THEME] + sorted(c for c in theme.unique() if c != BASE_THEME)
+    base = base_theme if base_theme in set(theme) else BASE_THEME  # 基準のテーマが少なすぎるときは元の基準
+    cats = [base] + sorted(c for c in theme.unique() if c != base)
     return pd.Categorical(theme, categories=cats)
 
 
-def fit(df, target, with_lang, with_subs=False, subs_rows_only=False):
+def fit(df, target, with_lang, with_subs=False, subs_rows_only=False, base_theme=BASE_THEME):
     d = df.dropna(subset=[target]).copy()
     if with_subs or subs_rows_only:
         d = d.dropna(subset=["log_subs"])
     d["region"] = d["region"].cat.remove_unused_categories()
-    d["theme"] = lump_themes(d)
+    d["theme"] = lump_themes(d, base_theme)
     terms = ["C(theme)", "C(region)", "log_age"] + [c for c in FORMAT_COLS.values() if d[c].sum() >= 5]
     if with_subs:
         terms.append("log_subs")
@@ -197,7 +200,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--region", nargs="+", default=list_regions(), help="分析に使う地域（複数）")
     parser.add_argument("--base", default="choshi", help="キーワード集計をする地域・回帰の基準の地域")
+    parser.add_argument("--base-theme", default=BASE_THEME, help="回帰のテーマの基準（例: 歴史・寺社）")
     args = parser.parse_args()
+    bt_name = args.base_theme
 
     all_data, names = [], {}
     for slug in args.region:
@@ -238,11 +243,11 @@ def main():
     results = {}
     for market, with_lang in [("海外", True), ("国内", False)]:
         d = df[df["market"] == market]
-        m1, d1 = fit(d, "log_views", with_lang)
+        m1, d1 = fit(d, "log_views", with_lang, base_theme=bt_name)
         results[f"{market}_再生数"] = print_model(
             f"B-{market}. {market}向け動画の再生数に効く要因", m1, d1,
-            f"基準: テーマ「{BASE_THEME}」、地域「{base_name}」" + ("、言語「英語」" if with_lang else ""))
-        m2, d2 = fit(d, "log_eng", with_lang)
+            f"基準: テーマ「{d1['theme'].cat.categories[0]}」、地域「{base_name}」" + ("、言語「英語」" if with_lang else ""))
+        m2, d2 = fit(d, "log_eng", with_lang, base_theme=bt_name)
         results[f"{market}_エンゲージメント率"] = print_model(
             f"B-{market}. {market}向け動画のエンゲージメント率に効く要因", m2, d2,
             f"再生{MIN_VIEWS_FOR_RATE}回以上の動画のみ")
@@ -251,8 +256,8 @@ def main():
     if df["log_subs"].notna().sum() > 50:
         for market, with_lang in [("海外", True), ("国内", False)]:
             d = df[df["market"] == market]
-            m0, d0 = fit(d, "log_views", with_lang, subs_rows_only=True)
-            m1, d1 = fit(d, "log_views", with_lang, with_subs=True)
+            m0, d0 = fit(d, "log_views", with_lang, subs_rows_only=True, base_theme=bt_name)
+            m1, d1 = fit(d, "log_views", with_lang, with_subs=True, base_theme=bt_name)
             t0, t1 = effect_table(m0, d0), effect_table(m1, d1)
             comp = t0[["要因", "効果（倍）", "判定"]].merge(
                 t1[["要因", "効果（倍）", "判定", "本数"]], on="要因", how="outer", suffixes=("_なし", "_あり"))
@@ -266,7 +271,9 @@ def main():
             print(f"\n=== C-{market}. 登録者数をそろえても効果は残るか（{market}向けの再生数） ===")
             print(f"（登録者数が分かる {int(m1.nobs)}本で比較。R²: なし {m0.rsquared:.2f} → あり {m1.rsquared:.2f}。** p<0.01、* p<0.05）")
             print(shown.to_string(index=False))
-            results[f"{market}_再生数_登録者数あり"] = t1
+            results[f"{market}_再生数_登録者数あり"] = print_model(
+                f"C-{market}. 登録者数ありのモデルの詳細（95%信頼区間つき）", m1, d1,
+                f"基準: テーマ「{d1['theme'].cat.categories[0]}」、地域「{base_name}」" + ("、言語「英語」" if with_lang else ""))
     else:
         print("\n（チャンネルの登録者数がないので、頑健性の確認は飛ばします。fetch_channel_stats.py を実行すると追加されます）")
 
@@ -276,8 +283,9 @@ def main():
     stamp = datetime.now().strftime("%Y%m%d_%H%M")
     if kt is not None:
         kt.to_csv(out_dir / f"{stamp}_{args.base}_keywords.csv", index=False, encoding="utf-8-sig")
+    suffix = "" if bt_name == BASE_THEME else f"_基準{bt_name}"
     for key, t in results.items():
-        t.to_csv(out_dir / f"{stamp}_regression_{key}.csv", index=False, encoding="utf-8-sig")
+        t.to_csv(out_dir / f"{stamp}_regression_{key}{suffix}.csv", index=False, encoding="utf-8-sig")
     print(f"\n保存しました: {out_dir}\\{stamp}_*.csv")
 
 

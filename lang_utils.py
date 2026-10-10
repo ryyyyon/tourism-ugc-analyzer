@@ -22,6 +22,7 @@
          （例: 台湾の銚子電鉄の動画タイトルが ko 71% と判定された）
     4. タイトルがアルファベット等
          投稿者の言語設定あり（zxx以外）→ その言語
+         英語特有の機能語（the, to など）がある → en
          タイトルが英語と判定          → en
          説明文にかながある           → ja（ローマ字の日本語タイトルとみなす）
          それ以外                    → langdetect の結果
@@ -140,6 +141,19 @@ def is_bilingual_english(title):
     return sum(len(w) for w in words) >= len(JA_CHAR.findall(title))
 
 
+# 英語特有の機能語（ほかの言語ではあまり使われないもの）
+# （固有名詞が多い英語のタイトル「Anime Pilgrimage to Oarai, Ibaraki」が、
+#   言語判定ライブラリでリトアニア語と判定されたため追加）
+EN_FUNCTION_WORDS = {"the", "to", "of", "and", "with", "from", "for", "on", "at", "is", "my", "your",
+                     "how", "what", "this", "you", "why", "where"}
+NON_EN_ACCENTS = re.compile(r"[ñãõçáéíóúàèìòùâêîôûäëïöüßăơưđ]", re.IGNORECASE)
+
+
+def looks_english(title):
+    words = {w.lower() for w in re.findall(r"[A-Za-z']+", title)}
+    return bool(words & EN_FUNCTION_WORDS) and not NON_EN_ACCENTS.search(title)
+
+
 def _valid_setting(code):
     return isinstance(code, str) and code and code.lower() != "zxx"
 
@@ -172,6 +186,8 @@ def detect_video_language(title, description, audio_lang=None, default_lang=None
     for code in (audio_lang, default_lang):
         if _valid_setting(code):
             return normalize_code(code), "youtube_setting"
+    if looks_english(title):
+        return "en", "english_words"
     if _langdetect(title) == "en":
         return "en", "langdetect_title"
     if KANA.search(desc):

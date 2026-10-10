@@ -1,0 +1,62 @@
+{
+  "name": "佐原（千葉県香取市）",
+  "note": "比較対象・延長先。日本遺産「北総四都市江戸紀行」の商家の町。香取神宮、小野川の舟めぐり",
+  "max_pages_per_keyword": 2,
+  "search_keywords": [
+    "佐原 観光",
+    "佐原 町並み 舟めぐり",
+    "香取神宮",
+    "Sawara Chiba",
+    "Katori Jingu",
+    "佐原の大祭",
+    "Sawara Little Edo"
+  ],
+  "place_terms": [
+    "佐原",
+    "sawara",
+    "香取神宮",
+    "katori",
+    "香取市",
+    "사와라"
+  ],
+  "name_terms": [
+    "佐原",
+    "sawara",
+    "香取",
+    "katori",
+    "사와라"
+  ],
+  "extra_tourism": {
+    "町歩き・レトロ": [
+      "小江戸",
+      "町並み",
+      "舟めぐり",
+      "小野川",
+      "伊能忠敬",
+      "little edo",
+      "boat ride",
+      "canal"
+    ],
+    "歴史・寺社": [
+      "香取神宮",
+      "katori jingu",
+      "katori shrine"
+    ],
+    "祭り・イベント": [
+      "佐原の大祭",
+      "山車",
+      "float festival"
+    ]
+  },
+  "extra_noise": {
+    "無関係・その他": [
+      "鰆",
+      "さわら料理",
+      "spanish mackerel",
+      "sawara fish",
+      "早良",
+      "fukuoka",
+      "福岡"
+    ]
+  }
+}

@@ -4,6 +4,9 @@
 使い方:
   python make_validation_sample.py                  # 各地域から国内15本・海外15本ずつ（計90本）
   python make_validation_sample.py --per-group 10   # 本数を減らす
+  python make_validation_sample.py --themes グルメ 祭り・イベント 歴史・寺社 --per-theme 15
+      # テーマ別の精度を確かめる：海外向けの動画のうち、分類でそのテーマとした動画を15本ずつ選ぶ
+      # （企画書の「食と祭りは寺の約4倍」に使うテーマ。前の検証で選んだ動画は除く）
 
 作られるファイル（data/validation/）:
   labeling_<日時>.xlsx     … 人が正解を記入するファイル。分類の結果は載せていない
@@ -17,7 +20,7 @@
   - 乱数のシードを固定し、同じ条件なら同じ動画が選ばれるようにする
   - 並び順はシャッフルする（地域ごとに固まっていると、判断の基準がずれやすいため）
 
-記入後は evaluate_validation.py で精度を計算する。
+記入後は evaluate_validation.py で精度を計算する（テーマを指定して選んだときは --all を付けて、前の検証とまとめる）。
 """
 
 import argparse
@@ -32,13 +35,54 @@ from classify_themes import build_themed_videos
 from region_config import DATA_ROOT, list_regions
 from theme_rules import TOURISM_THEMES
 
-THEME_CHOICES = list(TOURISM_THEMES.keys()) + ["旅行全般", "どれにも当てはまらない"]
+def _all_theme_choices():
+    """共通のテーマに、地域の設定ファイルで追加したテーマ（空港、乗り継ぎ・待ち時間など）を足す"""
+    from region_config import load_region
+    themes = list(TOURISM_THEMES.keys())
+    for slug in list_regions():
+        for t in load_region(slug).get("extra_tourism", {}):
+            if t not in themes:
+                themes.append(t)
+    return themes + ["旅行全般", "どれにも当てはまらない"]
+
+
+THEME_CHOICES = _all_theme_choices()
 TOURISM_CHOICES = ["観光", "観光以外"]
 LANG_CHOICES = ["日本語", "英語", "韓国語", "中国語", "タイ語", "スペイン語", "その他"]
 
 FONT = "Arial"
 YELLOW = PatternFill("solid", start_color="FFFF00")
 HEADER_FILL = PatternFill("solid", start_color="D9D9D9")
+
+
+def already_sampled(out_dir):
+    """これまでの検証で選んだ動画（同じ動画を二度記入しないように除く）"""
+    ids = set()
+    for p in out_dir.glob("predictions_*.csv"):
+        ids.update(pd.read_csv(p)["video_id"].astype(str))
+    return ids
+
+
+def sample_by_theme(themes, per_theme, market, seed, regions, exclude):
+    """分類でそのテーマとした動画を、テーマごとに選ぶ（テーマ別の適合率を確かめる用）"""
+    frames = []
+    for slug in regions:
+        region, videos, _, _ = build_themed_videos(slug)
+        frames.append(videos.assign(region=region["name"].split("（")[0]))
+    allv = pd.concat(frames, ignore_index=True)
+    allv = allv[~allv["is_noise"] & ~allv["video_id"].astype(str).isin(exclude)]
+    if market != "すべて":
+        allv = allv[allv["market"] == market]
+    picks = []
+    for th in themes:
+        d = allv[allv["primary_theme"] == th]
+        if d.empty:
+            print(f"（{th}に分類された動画がありません）")
+            continue
+        picks.append(d.sample(n=min(per_theme, len(d)), random_state=seed))
+    df = pd.concat(picks).sample(frac=1, random_state=seed).reset_index(drop=True)
+    df["番号"] = range(1, len(df) + 1)
+    return df
 
 
 def sample_videos(per_group, seed, regions):
@@ -129,24 +173,41 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--per-group", type=int, default=15, help="地域ごと・国内/海外ごとの本数")
     parser.add_argument("--seed", type=int, default=42, help="乱数のシード")
-    parser.add_argument("--region", nargs="+", default=list_regions())
+    parser.add_argument("--region", nargs="+", default=None, help="地域（省略するとデータのある全地域）")
+    parser.add_argument("--themes", nargs="+", help="このテーマに分類された動画を選ぶ（テーマ別の精度を確かめる）")
+    parser.add_argument("--per-theme", type=int, default=15, help="--themes のときの、テーマごとの本数")
+    parser.add_argument("--market", default="海外", choices=["海外", "国内", "すべて"], help="--themes のときの対象")
     args = parser.parse_args()
 
-    df = sample_videos(args.per_group, args.seed, args.region)
+    from region_config import latest
+    regions = args.region or [s for s in list_regions() if latest(s, "videos_check_*.csv") is not None]
     out_dir = DATA_ROOT / "validation"
     out_dir.mkdir(parents=True, exist_ok=True)
+    if args.themes:
+        df = sample_by_theme(args.themes, args.per_theme, args.market, args.seed, regions, already_sampled(out_dir))
+        df["sample"] = "theme"
+    else:
+        df = sample_videos(args.per_group, args.seed, regions)
+        df["sample"] = "random"
     stamp = datetime.now().strftime("%Y%m%d_%H%M")
 
     pred = df[["番号", "video_id", "region", "is_noise", "primary_theme", "themes",
-               "lang_final", "market", "title"]]
+               "lang_final", "market", "title", "sample"]]
     pred.to_csv(out_dir / f"predictions_{stamp}.csv", index=False, encoding="utf-8-sig")
     xlsx = out_dir / f"labeling_{stamp}.xlsx"
     write_workbook(df, xlsx)
 
-    print(f"検証用に {len(df)}本を選びました（地域ごとに国内・海外 各{args.per_group}本まで）")
-    print(df.groupby(["region", "market"]).size().to_string())
+    if args.themes:
+        print(f"検証用に {len(df)}本を選びました（{args.market}向けの動画から、テーマごとに{args.per_theme}本まで。"
+              f"前の検証で選んだ動画は除く）")
+        print(df.groupby(["primary_theme", "region"]).size().to_string())
+        print("※ どのテーマで選んだかは、記入するファイルには載せていません（先入観を避けるため）")
+    else:
+        print(f"検証用に {len(df)}本を選びました（地域ごとに国内・海外 各{args.per_group}本まで）")
+        print(df.groupby(["region", "market"]).size().to_string())
     print(f"\nラベル付け用: {xlsx}")
-    print("黄色の列に記入して上書き保存したら、python evaluate_validation.py を実行してください。")
+    print("黄色の列に記入して上書き保存したら（または make_label_gallery.py の記入ページで記入したら）、"
+          "python evaluate_validation.py --all を実行してください。")
 
 
 if __name__ == "__main__":

@@ -28,7 +28,8 @@ from region_config import DATA_ROOT, list_regions
 pd.set_option("display.unicode.east_asian_width", True)
 pd.set_option("display.width", 220)
 
-EXCLUDE_FROM_CONCENTRATION = ["未分類", "旅行全般"]
+# 空港そのものの動画は「町の観光」ではないので、集中度の計算から外す（成田の追加）
+EXCLUDE_FROM_CONCENTRATION = ["未分類", "旅行全般", "空港"]
 LANGUAGE_FREE = "散歩・車窓（言語不要）"
 
 

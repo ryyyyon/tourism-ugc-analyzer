@@ -128,7 +128,9 @@ TOURISM_THEMES = {
 }
 
 # ノイズ判定より先に見るテーマ（アニメの聖地巡礼は「アニメ」でノイズにされないように）
-PRIORITY_THEMES = ["アニメ聖地"]
+# 地域の設定にこのテーマがあるときだけ、ほかのテーマより優先する
+# （乗り継ぎ・待ち時間は成田の追加。乗り継ぎ客の動画は、戦略の一番の相手になる人たちの動画なので）
+PRIORITY_THEMES = ["乗り継ぎ・待ち時間", "アニメ聖地"]
 
 # アニメ作品名と一緒に出てきたら「現地を訪れている」とみなす語
 # 強い語: これがあれば、ファン向けの語があっても聖地巡礼とみなす
@@ -188,6 +190,7 @@ ITINERARY_CUES = [
 
 # どの観光テーマにも当てはまらない場合の受け皿
 GENERIC_TRAVEL = [
+    "เที่ยว", "ทริป", "viaje", "excursión", "du lịch", "wisata",  # タイ語・スペイン語・ベトナム語・インドネシア語の「旅行」
     "旅行", "観光", "旅", "日帰り", "vlog", "一人旅", "ひとり旅", "ドライブ", "帰省",
     "1日プラン", "穴場", "隠れスポット",
     "travel", "trip", "trips", "day trip", "day trips", "tour", "visit", "japan travel", "sightseeing", "underrated",
@@ -272,6 +275,10 @@ class Classifier:
         tourism = _merge(TOURISM_THEMES, region.get("extra_tourism", {}))
         noise = _merge(NOISE_THEMES, region.get("extra_noise", {}))
         self.place_terms = [normalize(t) for t in region.get("place_terms", [])]
+        # new_region.py で作った地域は、英字の地名を単語の頭からだけ探す（「gero」が「dangerous」に一致しないように）
+        self._strict_place = bool(region.get("strict_place_terms"))
+        self._place_pats = [re.compile(r"(?<![a-z])" + re.escape(t)) if _ASCII.match(t) else re.compile(re.escape(t))
+                            for t in self.place_terms]
         self._tourism = {t: _compile(k) for t, k in tourism.items()}
         self._noise = {t: _compile(k) for t, k in noise.items()}
         self._priority = {t: self._tourism[t] for t in PRIORITY_THEMES if t in self._tourism}
@@ -304,6 +311,8 @@ class Classifier:
     def is_relevant(self, title, description):
         """地名がタイトルか説明文に入っていれば、その地域の動画とみなす"""
         text = normalize(f"{title} {description}")
+        if self._strict_place:
+            return any(p.search(text) for p in self._place_pats)
         return any(term in text for term in self.place_terms)
 
     def classify(self, title, description, channel=""):
